@@ -12,14 +12,16 @@ import {
   parseImpression,
   parseRewrite,
   validateCharacter,
-  validateDescription,
+  validateEdits,
+  validateInstruction,
   validateCredentials,
   validateHistory,
   validateMemory,
   validateSpec,
   validateUserProfile,
 } from "../shared/schema";
-import type { Character, ChatMode, Credentials, UserProfile } from "../shared/types";
+import { applyEdits, countEdits, editLabels } from "../shared/edits";
+import type { Character, CharacterEdits, ChatMode, Credentials, UserProfile } from "../shared/types";
 import { runImage, runText, type ChatMessage, type TextOptions, type UpstreamResult } from "./cloudflare";
 import { characterMessages, chatMessages, imagePrompt, impressionMessages, rewriteMessages } from "./prompts";
 
@@ -146,19 +148,28 @@ async function handleChat(body: Record<string, unknown>, creds: Credentials): Pr
 }
 
 async function handleRewrite(body: Record<string, unknown>, creds: Credentials): Promise<Response> {
-  const character = validateCharacter(body.character);
-  const literal = body.literal === true;
-  const description = validateDescription(body.description, literal);
-  const seed = hashString(`rewrite:${character.id}:${character.version ?? 0}:${description}`);
+  const original = validateCharacter(body.character);
+  const edits = validateEdits(body.edits);
+  const instruction = validateInstruction(body.instruction);
+  const surprise = body.surprise === true;
+  const literalBio = body.literalBio === true && edits.bio !== undefined;
+  if (countEdits(edits) === 0 && instruction === "" && !surprise) {
+    return badRequest("Es gibt keine Änderung, die umgesetzt werden könnte.");
+  }
+  // Vorgaben der Person zuerst eintragen, die KI gleicht dann den Rest an.
+  const base = applyEdits(original, edits);
+  const seed = hashString(`rewrite:${original.id}:${original.version ?? 0}:${JSON.stringify(edits)}:${instruction}:${surprise}`);
   const res = await textJson(
     creds,
-    rewriteMessages(character, description, literal),
-    { maxTokens: 2200, temperature: 0.7, seed },
-    (v) => parseRewrite(v, character, Date.now()),
+    rewriteMessages(base, { fixed: editLabels(edits), instruction, surprise, literalBio, bioWritten: edits.bio !== undefined }),
+    { maxTokens: 2200, temperature: surprise ? 0.95 : 0.7, seed },
+    (v) => parseRewrite(v, base, Date.now()),
   );
   if (!res.ok) return upstreamFailure(res.error);
-  if (literal) res.value.character.profile.bio = description;
-  return json({ ok: true, data: res.value });
+  // Festgelegte Werte gewinnen immer, auch wenn das Modell sie verändert hat.
+  const enforced: CharacterEdits = literalBio ? edits : { ...edits, bio: undefined };
+  const character = applyEdits(res.value.character, enforced);
+  return json({ ok: true, data: { character, changes: res.value.changes } });
 }
 
 const ROUTES: Record<string, (body: Record<string, unknown>, creds: Credentials) => Promise<Response>> = {

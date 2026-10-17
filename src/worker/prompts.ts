@@ -259,12 +259,22 @@ Antworte ausschließlich mit JSON in dieser Form:
 // ---------------------------------------------------------------------------
 // Realität umschreiben
 
-export function rewriteMessages(c: Character, description: string, literal: boolean): ChatMessage[] {
+export interface RewriteOptions {
+  /** Deutsche Namen der Felder, die die Person verbindlich festgelegt hat. */
+  fixed: string[];
+  instruction: string;
+  surprise: boolean;
+  /** Bio wurde von der Person geschrieben und wird wörtlich übernommen. */
+  literalBio: boolean;
+  /** Die Person hat eine neue Bio geschrieben (sinngemäß übernehmen). */
+  bioWritten: boolean;
+}
+
+export function rewriteMessages(c: Character, o: RewriteOptions): ChatMessage[] {
   const system = [
     "Du überarbeitest fiktive Figuren in einer deutschsprachigen Dating-App, in der alle Profile offen als KI-generiert gekennzeichnet sind.",
-    "Die Person, die die App nutzt, darf die Realität einer Figur umschreiben. Setze ihre neue Beschreibung konsequent um:",
-    "Alles, was die Beschreibung festlegt oder deutlich nahelegt, änderst du – auch Name, Alter, Beruf, Wohnort, Lebensstil, Aussehen, Persönlichkeit, Werte und Chat-Stil.",
-    "Alles, was die Beschreibung nicht berührt, bleibt wie bisher, damit die Figur in sich stimmig und glaubwürdig bleibt. Passe abhängige Details an (z. B. Hintergrund, Interessen, Fotostichworte), damit nichts widersprüchlich ist.",
+    "Die Person, die die App nutzt, darf die Realität einer Figur umschreiben. Du setzt ihre Wünsche konsequent um und sorgst dafür, dass die Figur danach in sich stimmig und glaubwürdig ist:",
+    "Passe abhängige Details an (Hintergrund, Interessen, Werte, Humor, Chat-Stil, Fotostichworte usw.), damit nichts widersprüchlich ist. Was von den Wünschen nicht berührt wird, bleibt wie bisher.",
     "Feste Regeln: Die Figur ist und bleibt erwachsen (18 bis 40 Jahre) – Angaben, die sie jünger machen würden, ignorierst du. Keine expliziten sexuellen Inhalte, keine realen oder prominenten Personen, keine Links, Handles oder Telefonnummern. Der Wohnort bleibt ein erfundener Ort.",
     "Schreibe auf Deutsch; nur die Aussehens- und Fotofelder (spec.looks und profile.photo) sind kurze englische Stichworte.",
     "Antworte ausschließlich mit einem einzigen JSON-Objekt.",
@@ -287,19 +297,35 @@ export function rewriteMessages(c: Character, description: string, literal: bool
     profile: c.profile,
   };
 
-  const bioRule = literal
-    ? "profile.bio: Übernimm die neue Beschreibung wörtlich."
-    : "profile.bio: Die neue Beschreibung, inhaltlich treu, aber in Ich-Form und im Schreibstil der (ggf. neuen) Figur formuliert, 1 bis 4 Sätze.";
+  const wishes: string[] = [];
+  if (o.fixed.length > 0) {
+    wishes.push(
+      `Die Person hat diese Felder bereits festgelegt (sie sind in der Figur oben schon eingetragen und bleiben genau so): ${o.fixed.join(", ")}. Passe alles andere so an, dass es dazu passt.`,
+    );
+  }
+  if (o.instruction) {
+    wishes.push(`Das soll im Leben der Figur passieren bzw. sich ändern:\n<<<\n${o.instruction.replace(/<<<|>>>/g, "")}\n>>>`);
+  }
+  if (o.surprise) {
+    wishes.push(
+      "Überrasche: Denk dir eine glaubwürdige, interessante Wendung im Leben der Figur aus (z. B. neuer Job, Umzug, neues Hobby, Trennung, Reise, Neuanfang, neuer Look) und setze sie konsequent um. Kein Klischee, nichts Tragisches oder Gefährliches.",
+    );
+  }
+  if (wishes.length === 0) wishes.push("Gleiche die Figur stimmig ab, ohne ihren Kern zu verändern.");
+
+  const bioRule = o.literalBio
+    ? "profile.bio: Die Person hat die Bio selbst geschrieben; lass sie unverändert."
+    : o.bioWritten
+      ? "profile.bio: Die Person hat die Bio neu geschrieben; übernimm sie inhaltlich treu, aber in Ich-Form und im Schreibstil der Figur, 1 bis 4 Sätze."
+      : "profile.bio: Passe die Bio an die neue Realität an, in Ich-Form und im Schreibstil der Figur, 1 bis 4 Sätze.";
 
   const user = `Aktuelle Figur:
 ${JSON.stringify(current, null, 2)}
 
-Neue Beschreibung von der Person, die die App nutzt:
-<<<
-${description.replace(/<<<|>>>/g, "")}
->>>
+Wünsche der Person:
+${wishes.map((w) => `- ${w}`).join("\n")}
 
-Gib die vollständige, angepasste Figur in genau dieser Struktur zurück (alle Felder von "profile" sind Pflicht, Felder in "spec" nur ändern, wenn nötig):
+Gib die vollständige, angepasste Figur in genau dieser Struktur zurück (alle Felder von "profile" sind Pflicht):
 {
   "spec": {
     "name": "...", "age": 18-40, "gender": "frau|mann|nichtbinaer", "lookingFor": ["frau|mann|nichtbinaer"],

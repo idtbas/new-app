@@ -1,4 +1,5 @@
 import type { Decision } from "../shared/matching";
+import type { Character } from "../shared/types";
 
 export type RelationStatus =
   | "unseen" // im Stapel, noch nicht bewertet
@@ -39,6 +40,15 @@ export interface StoredMessage {
   text: string;
   /** Zeitpunkt, ab dem die Nachricht sichtbar ist (simulierte Verzögerung). */
   at: number;
+}
+
+/** Frühere Version einer umgeschriebenen Figur (inkl. Foto), für „Rückgängig“. */
+export interface HistoryEntry {
+  id?: number;
+  charId: string;
+  savedAt: number;
+  character: Character;
+  image?: Blob;
 }
 
 export interface StoredImage {

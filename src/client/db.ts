@@ -2,10 +2,11 @@
 // Hier werden NIE API-Tokens gespeichert (siehe Settings-Typ: kein Feld dafür).
 
 import type { Character, UserProfile } from "../shared/types";
-import type { Relation, StoredImage, StoredMessage } from "./model";
+import type { HistoryEntry, Relation, StoredImage, StoredMessage } from "./model";
 
 const DB_NAME = "ki-dating";
-const DB_VERSION = 1;
+// Version 2: zusätzlicher Speicher "history" für frühere Versionen umgeschriebener Figuren.
+const DB_VERSION = 2;
 
 /** Alles, was im Key-Value-Speicher liegen darf. Bewusst ohne Token-Felder. */
 export interface Settings {
@@ -22,14 +23,21 @@ function open(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise;
   dbPromise = new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
+    req.onupgradeneeded = (ev) => {
       const db = req.result;
-      db.createObjectStore("kv", { keyPath: "key" });
-      db.createObjectStore("characters", { keyPath: "id" });
-      db.createObjectStore("images", { keyPath: "id" });
-      db.createObjectStore("relations", { keyPath: "id" });
-      const messages = db.createObjectStore("messages", { keyPath: "id", autoIncrement: true });
-      messages.createIndex("charId", "charId", { unique: false });
+      // Bestehende Daten bleiben erhalten: nur fehlende Speicher anlegen.
+      if (ev.oldVersion < 1) {
+        db.createObjectStore("kv", { keyPath: "key" });
+        db.createObjectStore("characters", { keyPath: "id" });
+        db.createObjectStore("images", { keyPath: "id" });
+        db.createObjectStore("relations", { keyPath: "id" });
+        const messages = db.createObjectStore("messages", { keyPath: "id", autoIncrement: true });
+        messages.createIndex("charId", "charId", { unique: false });
+      }
+      if (ev.oldVersion < 2) {
+        const history = db.createObjectStore("history", { keyPath: "id", autoIncrement: true });
+        history.createIndex("charId", "charId", { unique: false });
+      }
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error ?? new Error("IndexedDB konnte nicht geöffnet werden"));
@@ -119,6 +127,24 @@ export async function messagesFor(charId: string): Promise<StoredMessage[]> {
 
 export async function addMessage(m: StoredMessage): Promise<void> {
   await wrap((await store("messages", "readwrite")).add(m));
+}
+
+export async function historyFor(charId: string): Promise<HistoryEntry[]> {
+  const idx = (await store("history")).index("charId");
+  const list = (await wrap(idx.getAll(IDBKeyRange.only(charId)))) as HistoryEntry[];
+  return list.sort((a, b) => b.savedAt - a.savedAt);
+}
+
+export async function getHistoryEntry(id: number): Promise<HistoryEntry | undefined> {
+  return (await wrap((await store("history")).get(id))) as HistoryEntry | undefined;
+}
+
+/** Legt eine frühere Version ab und behält höchstens `keep` Einträge pro Figur. */
+export async function addHistory(entry: HistoryEntry, keep: number): Promise<void> {
+  await wrap((await store("history", "readwrite")).add(entry));
+  const all = await historyFor(entry.charId);
+  const s = await store("history", "readwrite");
+  for (const old of all.slice(keep)) if (old.id !== undefined) s.delete(old.id);
 }
 
 /** Löscht die komplette lokale Datenbank dieser App. */

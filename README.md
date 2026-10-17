@@ -122,21 +122,31 @@ Der Worker hält keinen Zustand im Speicher.
   Unter 21 wird bewusst „early twenties“ beschrieben. Stabiler Seed pro Charakter.
 - **Konsistenz**: Ein Charakter wird einmal erzeugt und gespeichert (inkl. Bild) und verändert sich nie von selbst.
 
-## Realität umschreiben (✎)
+## Realität umschreiben (✎-Editor)
 
-Jede Profilkarte und der Profilbereich jedes Chats haben einen Stift. Damit bearbeitest du die Beschreibung
-einer Figur; nach dem Speichern passt Gemma (`/api/rewrite`) **die ganze Person** an: alles, was die neue
-Beschreibung festlegt oder nahelegt (Name, Alter, Geschlecht, Beruf, Wohnort, Lebensstil, Persönlichkeit,
-Interessen, Werte, Aussehen, Chat-Stil …), alles andere bleibt. Danach wird ein **neues Foto** erzeugt
-(neuer Bild-Seed je Version); das alte bleibt sichtbar, bis das neue fertig ist.
+Jede Profilkarte und der Profilbereich jedes Chats haben einen Stift. Er öffnet einen Editor mit sieben Bereichen:
 
-- Optional wird der Text wörtlich als Bio übernommen, sonst formuliert die KI ihn im Stil der Figur.
-- Leitplanken: Alter wird serverseitig hart auf 18–40 begrenzt (Hinweise auf Minderjährige lehnt schon der Editor ab),
-  keine expliziten Inhalte, keine realen Personen, Bild-Prompt bleibt „clearly an adult, fully clothed“.
-- ID, Seed und Erstellungszeit bleiben; ungültige Einzelwerte des Modells fallen auf den alten Stand zurück;
-  jede Änderung erhöht die Version der Figur.
-- Bereits gespeicherte Match-Entscheidungen bleiben bestehen. Chats laufen mit der neuen Realität weiter;
-  im Chat erscheint ein Hinweis, dass du die Realität umgeschrieben hast.
+| Bereich | Möglichkeiten |
+|---|---|
+| Story | Bio bearbeiten (optional wörtlich), freie Anweisung „Was soll in ihrem/seinem Leben passieren?“, Ideen-Vorschläge, 🎲 Überrasch mich |
+| Basis | Name, Alter (18–40), Wohnort, Beruf, Geschlecht, interessiert an, Dating-Absicht, Interessen, Werte |
+| Aussehen | Frisur, Körperbau, Ausstrahlung, Brille, Outfit, Foto-Szene, Fotostil (mit Vorlagen), „Nur neues Foto“ |
+| Persönlichkeit | Temperament, Charakterzüge, Humor, Regler für Wärme, Wählerischkeit, Initiative |
+| Chat-Stil | Antwortlänge, Emojis, Antworttempo, Schreibstil |
+| Lebensstil | Influencer:in, Creator (Abo-Plattform), statusorientiert |
+| Verlauf | bis zu 8 frühere Versionen inkl. Foto wiederherstellen |
+
+- **Mit KI** (Schalter „KI passt den Rest stimmig an“, bzw. immer bei Anweisung/Überraschung): `/api/rewrite`
+  trägt deine Vorgaben ein, Gemma gleicht alle übrigen Details stimmig an, danach werden deine Vorgaben
+  erneut erzwungen – festgelegte Werte gewinnen immer.
+- **Ohne KI**: Vorgaben werden sofort lokal übernommen, ohne API-Aufruf und ohne Kosten.
+- **Foto**: Ein neues Foto wird erzeugt, wenn „Neues Foto erzeugen“ aktiv ist (automatisch bei Aussehens-, Alters- oder
+  Geschlechtsänderungen, Anweisungen und Überraschungen). Das alte Foto bleibt sichtbar, bis das neue fertig ist.
+- **Leitplanken**: Alter hart 18–40 (Editor und Worker), Hinweise auf Minderjährige werden abgelehnt, keine expliziten
+  Inhalte, keine realen Personen, Bild-Prompt bleibt „clearly an adult, fully clothed“.
+- ID, Seed und Erstellungszeit bleiben; jede Änderung erhöht die Version. Gespeicherte Match-Entscheidungen bleiben,
+  Chats laufen mit der neuen Realität weiter (mit Hinweis im Chat). Der Verlauf liegt im IndexedDB-Speicher `history`
+  (Datenbank-Version 2; ältere Daten werden beim Upgrade übernommen).
 
 ## Matching
 
@@ -173,7 +183,7 @@ Workers AI hat ein kontoweites kostenloses Tageskontingent; bei bestehendem Beza
 
 ## Teststand – ehrlich
 
-**Automatisiert getestet (`npm test`, 62 Tests):**
+**Automatisiert getestet (`npm test`, 67 Tests):**
 - Multipart-Serialisierung inkl. boundary, kein manueller Content-Type, kein JSON-Body, `redirect: "manual"`, feste URL.
 - Status-/Fehlerweitergabe für 401, 403, 404/7003, 429/3040, 429/3036, 500, 504, 302 (nicht verfolgt),
   Netzwerkfehler (ohne HTTP-Antwort), Timeout; keine Upstream-Texte oder Tokens in Antworten.
@@ -183,16 +193,18 @@ Workers AI hat ein kontoweites kostenloses Tageskontingent; bei bestehendem Beza
 - Casting: Determinismus, nur Erwachsene, Vielfalt, Häufigkeit seltener Varianten, keine Kopplung an Geschlecht.
 - Matching: Determinismus, kein Münzwurf, Wählerischkeit, vorab festgelegtes Ergebnis bei Unentschlossenheit.
 - Getrennte Chatkontexte, Interesse/Erinnerung, Gesprächsende und Match-Auflösung.
-- Realität umschreiben: Übernahme der Änderungen, unveränderte ID/Seed, Altersgrenze 18–40, Rückfall bei ungültigen
-  Werten, wörtliche Bio, Versionszähler, neuer Bild-Seed und neue Frisur im Bild-Prompt.
+- Editor/Umschreiben: Vorgaben gewinnen gegen die KI, Anweisung und Überraschung im Prompt, wörtliche Bio,
+  Altersgrenze 18–40, strenge Validierung der Vorgaben, Rückfall bei ungültigen Modellwerten, Versionszähler,
+  neuer Bild-Seed, Änderungen ohne KI (rein lokal).
 
 **In der echten Workers-Laufzeit (lokal `wrangler dev`/workerd) geprüft:** Auslieferung der Assets inkl. CSP,
 Validierung, Origin-Prüfung, Fehlerweitergabe ohne Token-Leak (Upstream war blockiert → korrekt als
 „keine HTTP-Antwort“ gemeldet), FormData-Bildpfad.
 
 **End-to-End in Chromium (iPad- und iPhone-Viewport, Touch) mit simulierten `/api/*`-Antworten:**
-Altersbestätigung, Onboarding (Alter < 18 abgelehnt), Profilvorrat (≤ 3), KI-Kennzeichnung, Stift/Umschreiben
-(inkl. Ablehnung „16 Jahre“, neues Foto angefordert), Like/Ablehnen per Button,
+Altersbestätigung, Onboarding (Alter < 18 abgelehnt), Profilvorrat (≤ 3), KI-Kennzeichnung, Editor (7 Bereiche,
+Ablehnung „16 Jahre“, Änderung mit KI, Änderung ohne KI ohne API-Aufruf, Verlauf wiederherstellen, nur neues Foto),
+Datenbank-Upgrade v1 → v2 ohne Datenverlust, Like/Ablehnen per Button,
 Match, Chat mit simulierter Verzögerung, keine Tokens in URLs/Headern/Speichern, Neuladen (Tokens weg, Profile/Matches/
 Chats identisch), Bildfehler ohne Absturz, Kontingentfehler mit Status und Code, Löschen aller Daten.
 Das E2E-Skript lag in einem temporären Verzeichnis und ist nicht Teil des Repos.

@@ -167,7 +167,7 @@ const TRAITS = [
   "empathisch", "trocken", "nerdig", "launisch", "bodenständig", "melancholisch",
 ] as const;
 
-const WRITING_HABITS = [
+export const WRITING_HABITS = [
   "schreibt alles klein und ohne Punkt",
   "schreibt sauber mit Groß- und Kleinschreibung",
   "nutzt viele Abkürzungen wie 'vllt', 'ka', 'iwie'",

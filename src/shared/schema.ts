@@ -19,6 +19,7 @@ import {
   type Credentials,
   type GeneratedProfile,
   type HistoryEntry,
+  type CharacterEdits,
   type Impression,
   type RewriteResult,
   type UserProfile,
@@ -274,12 +275,74 @@ export function validateCharacter(v: unknown): Character {
 // ---------------------------------------------------------------------------
 // Umschreiben der Realität einer Figur
 
-const DESCRIPTION_MIN = 10;
-const DESCRIPTION_MAX = 600;
+/** Freie Anweisung an die KI (darf leer sein). */
+export function validateInstruction(v: unknown): string {
+  if (v === undefined || v === null || v === "") return "";
+  return str(v, "instruction", STRICT, 600, 0);
+}
 
-/** Neue Beschreibung der Person. Bei wörtlicher Übernahme gelten die Grenzen der Bio. */
-export function validateDescription(v: unknown, literal: boolean): string {
-  return literal ? str(v, "description", STRICT, 500, 20) : str(v, "description", STRICT, DESCRIPTION_MAX, DESCRIPTION_MIN);
+function optional<T>(o: Obj, key: string, fn: (x: unknown, p: string) => T): T | undefined {
+  return o[key] === undefined ? undefined : fn(o[key], key);
+}
+
+/** Prüft die im Editor festgelegten Änderungen streng. Unbekannte Felder werden ignoriert. */
+export function validateEdits(v: unknown): CharacterEdits {
+  const o = v === undefined ? {} : obj(v, "edits");
+  const p = (key: string) => `edits.${key}`;
+  const out: CharacterEdits = {};
+  const set = <K extends keyof CharacterEdits>(key: K, value: CharacterEdits[K] | undefined) => {
+    if (value !== undefined) out[key] = value;
+  };
+  set("name", optional(o, "name", (x) => str(x, p("name"), STRICT, 40)));
+  set("age", optional(o, "age", (x) => int(x, p("age"), MIN_AGE, CHARACTER_MAX_AGE)));
+  set("gender", optional(o, "gender", (x) => oneOf(x, p("gender"), GENDERS)));
+  set("lookingFor", optional(o, "lookingFor", (x) => uniqueGenders(x, p("lookingFor"))));
+  set("city", optional(o, "city", (x) => str(x, p("city"), STRICT, 60)));
+  set("intent", optional(o, "intent", (x) => oneOf(x, p("intent"), INTENTS)));
+  set("occupation", optional(o, "occupation", (x) => str(x, p("occupation"), STRICT, 100)));
+  set("bio", optional(o, "bio", (x) => str(x, p("bio"), STRICT, 500, 10)));
+  set("interests", optional(o, "interests", (x) => strList(x, p("interests"), STRICT, 3, 8, 40)));
+  set("traits", optional(o, "traits", (x) => strList(x, p("traits"), STRICT, 2, 6, 40)));
+  set("values", optional(o, "values", (x) => strList(x, p("values"), STRICT, 1, 6, 60)));
+  set("humor", optional(o, "humor", (x) => str(x, p("humor"), STRICT, 200)));
+  set("temperament", optional(o, "temperament", (x) => oneOf(x, p("temperament"), TEMPERAMENTS)));
+  set("lifestyle", optional(o, "lifestyle", (x) => [...new Set(arr(x, p("lifestyle"), STRICT, 0, 3, (y, q) => oneOf(y, q, LIFESTYLES)))]));
+
+  if (o.looks !== undefined) {
+    const l = obj(o.looks, p("looks"));
+    const looks: NonNullable<CharacterEdits["looks"]> = {};
+    const t = (key: string, max: number) => optional(l, key, (x) => str(x, `edits.looks.${key}`, STRICT, max));
+    if (t("hairHint", 120) !== undefined) looks.hairHint = t("hairHint", 120);
+    if (t("bodyType", 80) !== undefined) looks.bodyType = t("bodyType", 80);
+    if (t("skin", 80) !== undefined) looks.skin = t("skin", 80);
+    if (t("outfit", 160) !== undefined) looks.outfit = t("outfit", 160);
+    if (t("setting", 200) !== undefined) looks.setting = t("setting", 200);
+    if (t("photoStyle", 200) !== undefined) looks.photoStyle = t("photoStyle", 200);
+    const a = optional(l, "attractiveness", (x) => oneOf(x, "edits.looks.attractiveness", ATTRACTIVENESS));
+    if (a !== undefined) looks.attractiveness = a;
+    const g = optional(l, "glasses", (x) => bool(x, "edits.looks.glasses"));
+    if (g !== undefined) looks.glasses = g;
+    if (Object.keys(looks).length > 0) out.looks = looks;
+  }
+
+  if (o.style !== undefined) {
+    const st = obj(o.style, p("style"));
+    const style: NonNullable<CharacterEdits["style"]> = {};
+    const rl = optional(st, "replyLength", (x) => oneOf(x, "edits.style.replyLength", REPLY_LENGTHS));
+    if (rl !== undefined) style.replyLength = rl;
+    const em = optional(st, "emoji", (x) => oneOf(x, "edits.style.emoji", EMOJI_USES));
+    if (em !== undefined) style.emoji = em;
+    const rs = optional(st, "responsiveness", (x) => oneOf(x, "edits.style.responsiveness", RESPONSIVENESS));
+    if (rs !== undefined) style.responsiveness = rs;
+    const wr = optional(st, "writing", (x) => str(x, "edits.style.writing", STRICT, 160));
+    if (wr !== undefined) style.writing = wr;
+    for (const key of ["warmth", "pickiness", "initiative"] as const) {
+      const n = optional(st, key, (x) => num(x, `edits.style.${key}`, 0, 1));
+      if (n !== undefined) style[key] = n;
+    }
+    if (Object.keys(style).length > 0) out.style = style;
+  }
+  return out;
 }
 
 function objOrEmpty(v: unknown): Obj {

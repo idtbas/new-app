@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { parseRewrite, validateCharacter } from "../src/shared/schema";
+import { affectsPhoto, applyEdits, countEdits, editLabels } from "../src/shared/edits";
+import { parseRewrite, validateCharacter, validateEdits } from "../src/shared/schema";
 import { handleApi } from "../src/worker/index";
 import { IMAGE_TOKEN, credentials, makeCharacter, profile } from "./fixtures";
 
@@ -87,33 +88,66 @@ describe("Realität umschreiben – Validierung", () => {
 });
 
 describe("Realität umschreiben – Worker", () => {
-  it("liefert die umgeschriebene Figur, ohne Token im Prompt", async () => {
+  function stubModel(answer: unknown): string[] {
     const bodies: string[] = [];
     vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
       bodies.push(String(init.body));
-      return chatCompletion(JSON.stringify(rewritten()));
+      return chatCompletion(JSON.stringify(answer));
     });
-    const res = await handleApi(apiRequest({ credentials, character: original, description: "Sie ist Pilotin, hat rote Haare und trägt Brille.", literal: false }));
+    return bodies;
+  }
+
+  it("setzt eine freie Anweisung um, ohne Token im Prompt", async () => {
+    const bodies = stubModel(rewritten());
+    const res = await handleApi(apiRequest({ credentials, character: original, edits: {}, instruction: "Sie ist jetzt Pilotin mit roten Haaren.", literalBio: false, surprise: false }));
     const json = (await res.json()) as any;
     expect(res.status).toBe(200);
     expect(json.data.character.spec.name).toBe("Mara");
     expect(json.data.character.version).toBe(1);
-    expect(bodies[0]).toContain("Sie ist Pilotin");
+    expect(bodies[0]).toContain("Sie ist jetzt Pilotin");
     expect(bodies[0]).not.toContain(IMAGE_TOKEN);
   });
 
-  it("übernimmt bei 'wörtlich' den Text exakt als Bio", async () => {
-    vi.stubGlobal("fetch", async () => chatCompletion(JSON.stringify(rewritten())));
+  it("festgelegte Felder gewinnen, auch wenn das Modell sie überschreibt", async () => {
+    const bodies = stubModel(rewritten({}, { name: "Mara", age: 33, city: "Andersort" }));
+    const edits = { name: "Juna", age: 27, looks: { hairHint: "long blonde hair", glasses: false }, style: { emoji: "oft" } };
+    const res = await handleApi(apiRequest({ credentials, character: original, edits, instruction: "", literalBio: false, surprise: false }));
+    const c = ((await res.json()) as any).data.character;
+    expect(c.spec.name).toBe("Juna");
+    expect(c.spec.age).toBe(27);
+    expect(c.spec.looks.hairHint).toBe("long blonde hair");
+    expect(c.profile.photo.hair).toBe("long blonde hair");
+    expect(c.spec.looks.glasses).toBe(false);
+    expect(c.spec.style.emoji).toBe("oft");
+    // Nicht festgelegte Felder darf die KI anpassen.
+    expect(c.spec.city).toBe("Andersort");
+    // Die KI erfährt, welche Felder fest sind.
+    expect(bodies[0]).toContain("Name, Alter, Frisur, Brille, Emojis");
+  });
+
+  it("übernimmt bei 'wörtlich' die Bio exakt", async () => {
+    stubModel(rewritten());
     const text = "Ich bin jetzt Pilotin und liebe Nachtflüge über die Ostsee.";
-    const res = await handleApi(apiRequest({ credentials, character: original, description: text, literal: true }));
+    const res = await handleApi(apiRequest({ credentials, character: original, edits: { bio: text }, instruction: "", literalBio: true, surprise: false }));
     expect(((await res.json()) as any).data.character.profile.bio).toBe(text);
   });
 
-  it("lehnt zu kurze Beschreibungen ohne Cloudflare-Aufruf ab", async () => {
+  it("schickt bei 'Überrasch mich' eine Überraschungs-Anweisung", async () => {
+    const bodies = stubModel(rewritten());
+    const res = await handleApi(apiRequest({ credentials, character: original, edits: {}, instruction: "", literalBio: false, surprise: true }));
+    expect(res.status).toBe(200);
+    expect(bodies[0]).toContain("Überrasche");
+  });
+
+  it("lehnt Anfragen ohne jede Änderung und ungültige Vorgaben ohne Cloudflare-Aufruf ab", async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
-    const res = await handleApi(apiRequest({ credentials, character: original, description: "kurz", literal: false }));
-    expect(res.status).toBe(400);
+    const none = await handleApi(apiRequest({ credentials, character: original, edits: {}, instruction: "", literalBio: false, surprise: false }));
+    expect(none.status).toBe(400);
+    const young = await handleApi(apiRequest({ credentials, character: original, edits: { age: 16 }, instruction: "", surprise: false }));
+    expect(young.status).toBe(400);
+    const badEnum = await handleApi(apiRequest({ credentials, character: original, edits: { style: { emoji: "immer" } }, instruction: "", surprise: false }));
+    expect(badEnum.status).toBe(400);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -133,5 +167,47 @@ describe("Realität umschreiben – Worker", () => {
     expect(seedOf(forms[0]!)).not.toBe(seedOf(forms[1]!));
     expect(forms[1]).toContain("short red hair");
     expect(forms[1]).toContain("clearly an adult");
+  });
+});
+
+describe("Direkte Vorgaben (ohne KI)", () => {
+  it("wendet Vorgaben an und bleibt gültig", () => {
+    const edited = applyEdits(original, {
+      name: "Juna",
+      age: 30,
+      occupation: "Tierärztin",
+      interests: ["Pferde", "Krimis", "Kochen"],
+      lifestyle: ["influencer"],
+      looks: { bodyType: "athletic build", outfit: "sportswear", setting: "in a park with a dog on a leash" },
+      style: { replyLength: "lang", warmth: 0.9 },
+    });
+    expect(edited.spec.name).toBe("Juna");
+    expect(edited.profile.occupation).toBe("Tierärztin");
+    expect(edited.spec.occupationHint).toBe("Tierärztin");
+    expect(edited.profile.photo.outfit).toBe("sportswear");
+    expect(edited.spec.lifestyle).toEqual(["influencer"]);
+    expect(edited.spec.style.warmth).toBe(0.9);
+    // Wunschspanne wandert mit dem Alter mit
+    expect(edited.spec.ageRange[0] - original.spec.ageRange[0]).toBe(30 - original.spec.age);
+    expect(validateCharacter({ ...edited, version: 1 })).toBeTruthy();
+    // Original unverändert (rein funktional)
+    expect(original.spec.name).not.toBe("Juna");
+  });
+
+  it("zählt und benennt Änderungen und erkennt Fotorelevanz", () => {
+    const e = { name: "X", looks: { glasses: true }, style: { emoji: "nie" as const } };
+    expect(countEdits(e)).toBe(3);
+    expect(editLabels(e)).toEqual(["Name", "Brille", "Emojis"]);
+    expect(affectsPhoto(e)).toBe(true);
+    expect(affectsPhoto({ name: "X" })).toBe(false);
+  });
+
+  it("validiert Vorgaben streng", () => {
+    expect(validateEdits({ age: 25, looks: { glasses: true } })).toEqual({ age: 25, looks: { glasses: true } });
+    expect(() => validateEdits({ age: 17 })).toThrow();
+    expect(() => validateEdits({ style: { warmth: 2 } })).toThrow();
+    expect(() => validateEdits({ lookingFor: [] })).toThrow();
+    expect(() => validateEdits({ interests: ["nur eins"] })).toThrow();
+    expect(validateEdits({ unknown: 1 })).toEqual({});
   });
 });

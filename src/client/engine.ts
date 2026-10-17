@@ -5,18 +5,31 @@
 import { LIMITS } from "../shared/config";
 import { castCharacter } from "../shared/casting";
 import { BLOCKING_KINDS, type ApiErrorInfo, describeError } from "../shared/errors";
+import { applyEdits, editLabels } from "../shared/edits";
 import { decide } from "../shared/matching";
-import { validateCharacter } from "../shared/schema";
-import type { Character, ChatMode, UserProfile } from "../shared/types";
+import { ValidationError, validateCharacter } from "../shared/schema";
+import type { Character, CharacterEdits, ChatMode, UserProfile } from "../shared/types";
 import { api, ApiError, toErrorInfo } from "./api";
 import { applyDecision, applyTurn, buildHistory, replyDelay } from "./chatlogic";
 import { hasCredentials } from "./credentials";
 import * as db from "./db";
-import { newRelation, type Relation, type StoredMessage } from "./model";
+import { newRelation, type HistoryEntry, type Relation, type StoredMessage } from "./model";
 
 /** Maximal so viele automatische Versuche pro Job, danach nur noch per Knopf. */
 const MAX_JOB_FAILURES = 2;
 const RETRY_BACKOFF_MS = 90_000;
+/** So viele frühere Versionen pro Figur bleiben im Verlauf. */
+const HISTORY_KEEP = 8;
+
+export interface EditRequest {
+  edits: CharacterEdits;
+  instruction: string;
+  literalBio: boolean;
+  surprise: boolean;
+  /** KI passt nicht festgelegte Details stimmig an. */
+  harmonize: boolean;
+  newPhoto: boolean;
+}
 
 type Listener = () => void;
 
@@ -207,32 +220,90 @@ class Engine {
   // Realität umschreiben
 
   /**
-   * Die Person schreibt die Beschreibung einer Figur um; die KI passt die ganze Figur an.
-   * Gespeicherte Match-Entscheidungen bleiben bestehen, Chats laufen mit der neuen Realität weiter.
-   * Gibt die Zusammenfassung der Änderungen zurück. Fehler werden als ApiError geworfen.
+   * Die Person ändert eine Figur im Editor. Mit `harmonize` (oder bei freier Anweisung /
+   * Überraschung) passt die KI den Rest stimmig an, sonst werden nur die Vorgaben übernommen –
+   * sofort und ohne API-Aufruf. Gespeicherte Match-Entscheidungen bleiben bestehen.
+   * Gibt eine kurze Zusammenfassung zurück. Fehler werden als ApiError geworfen.
    */
-  async rewriteCharacter(id: string, description: string, literal: boolean): Promise<string> {
+  async editCharacter(id: string, req: EditRequest): Promise<string> {
     const c = await db.getCharacter(id);
     if (!c) throw new ApiError({ kind: "bad_request", message: "Dieses Profil gibt es nicht mehr." });
-    const res = await api.rewrite(c, description, literal);
+    const useAi = req.harmonize || req.instruction.trim() !== "" || req.surprise;
     let updated: Character;
-    try {
-      updated = validateCharacter(res.character);
-    } catch {
-      throw new ApiError({ kind: "model_output", message: "Das umgeschriebene Profil ist unvollständig." });
+    let summary: string;
+
+    if (useAi) {
+      const res = await api.rewrite({ character: c, edits: req.edits, instruction: req.instruction.trim(), literalBio: req.literalBio, surprise: req.surprise });
+      try {
+        updated = validateCharacter(res.character);
+      } catch {
+        throw new ApiError({ kind: "model_output", message: "Das umgeschriebene Profil ist unvollständig." });
+      }
+      summary = res.changes || "Profil umgeschrieben.";
+    } else {
+      updated = { ...applyEdits(c, req.edits), version: (c.version ?? 0) + 1, editedAt: Date.now() };
+      try {
+        updated = validateCharacter(updated);
+      } catch (err) {
+        const detail = err instanceof ValidationError ? ` (${err.path}: ${err.reason})` : "";
+        throw new ApiError({ kind: "bad_request", message: `Die Änderungen sind ungültig${detail}.` });
+      }
+      const labels = editLabels(req.edits);
+      summary = labels.length > 0 ? `Geändert: ${labels.join(", ")}.` : "Neue Version erstellt.";
     }
     if (updated.id !== c.id || (updated.version ?? 0) <= (c.version ?? 0)) {
       throw new ApiError({ kind: "model_output", message: "Das umgeschriebene Profil passt nicht zum Original." });
     }
-    await db.putCharacter(updated);
-    const rel = await db.getRelation(id);
+
+    await this.saveVersion(c, updated, req.newPhoto);
+    return summary;
+  }
+
+  /** Alte Version in den Verlauf, neue speichern, Chat-Hinweis, ggf. neues Foto. */
+  private async saveVersion(before: Character, after: Character, newPhoto: boolean): Promise<void> {
+    const oldImage = await db.getImage(before.id);
+    await db.addHistory({ charId: before.id, savedAt: Date.now(), character: before, image: oldImage?.blob }, HISTORY_KEEP);
+    await db.putCharacter(after);
+    const rel = await db.getRelation(before.id);
+    if (rel && !newPhoto && rel.imageState === "ready") {
+      // Foto bleibt bewusst: gilt als aktuell für die neue Version.
+      await db.putRelation({ ...rel, imageVersion: after.version ?? 0 });
+    }
     if (rel && (rel.status === "matched" || rel.status === "unmatched")) {
-      const renamed = updated.spec.name !== c.spec.name ? ` – aus ${c.spec.name} wurde ${updated.spec.name}` : "";
-      await db.addMessage({ charId: id, from: "system", text: `Du hast die Realität dieser Person umgeschrieben${renamed}.`, at: Date.now() });
+      const renamed = after.spec.name !== before.spec.name ? ` – aus ${before.spec.name} wurde ${after.spec.name}` : "";
+      await db.addMessage({ charId: before.id, from: "system", text: `Du hast die Realität dieser Person umgeschrieben${renamed}.`, at: Date.now() });
     }
     this.emit();
-    void this.loadImage(updated, true);
-    return res.changes;
+    if (newPhoto) void this.loadImage(after, true);
+  }
+
+  async history(id: string): Promise<HistoryEntry[]> {
+    return db.historyFor(id);
+  }
+
+  /** Stellt eine frühere Version (inkl. Foto) als neue Version wieder her. */
+  async restoreVersion(id: string, historyId: number): Promise<void> {
+    const c = await db.getCharacter(id);
+    const entry = await db.getHistoryEntry(historyId);
+    if (!c || !entry || entry.charId !== id) throw new ApiError({ kind: "bad_request", message: "Diese Version gibt es nicht mehr." });
+    const restored: Character = { ...validateCharacter(entry.character), version: (c.version ?? 0) + 1, editedAt: Date.now() };
+    const oldImage = await db.getImage(id);
+    await db.addHistory({ charId: id, savedAt: Date.now(), character: c, image: oldImage?.blob }, HISTORY_KEEP);
+    await db.putCharacter(restored);
+    const rel = await db.getRelation(id);
+    if (entry.image) {
+      await db.putImage({ id, blob: entry.image });
+      const url = this.imageUrls.get(id);
+      if (url) URL.revokeObjectURL(url);
+      this.imageUrls.delete(id);
+      if (rel) await db.putRelation({ ...rel, imageState: "ready", imageVersion: restored.version ?? 0 });
+    } else if (rel && rel.imageState === "ready") {
+      await db.putRelation({ ...rel, imageVersion: restored.version ?? 0 });
+    }
+    if (rel && (rel.status === "matched" || rel.status === "unmatched")) {
+      await db.addMessage({ charId: id, from: "system", text: "Du hast eine frühere Realität dieser Person wiederhergestellt.", at: Date.now() });
+    }
+    this.emit();
   }
 
   // -------------------------------------------------------------------------

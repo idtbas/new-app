@@ -162,13 +162,56 @@ export interface ChatRequest {
   history: HistoryEntry[];
 }
 
+/**
+ * Gezielte Änderungen, die die Person im Editor festlegt. Alle Felder optional;
+ * gesetzte Felder sind verbindlich und werden auch von der KI nicht überschrieben.
+ */
+export interface CharacterEdits {
+  name?: string;
+  age?: number;
+  gender?: Gender;
+  lookingFor?: Gender[];
+  city?: string;
+  intent?: Intent;
+  occupation?: string;
+  bio?: string;
+  interests?: string[];
+  traits?: string[];
+  values?: string[];
+  humor?: string;
+  temperament?: Temperament;
+  lifestyle?: Lifestyle[];
+  looks?: {
+    hairHint?: string;
+    bodyType?: string;
+    attractiveness?: Attractiveness;
+    glasses?: boolean;
+    skin?: string;
+    outfit?: string;
+    setting?: string;
+    photoStyle?: string;
+  };
+  style?: {
+    replyLength?: ReplyLength;
+    emoji?: EmojiUse;
+    responsiveness?: Responsiveness;
+    writing?: string;
+    warmth?: number;
+    pickiness?: number;
+    initiative?: number;
+  };
+}
+
 export interface RewriteRequest {
   credentials: Credentials;
   character: Character;
-  /** Neue Beschreibung, die die Person geschrieben hat. */
-  description: string;
-  /** true: Text wird wörtlich als Bio übernommen, sonst formuliert die KI ihn im Stil der Figur. */
-  literal: boolean;
+  edits: CharacterEdits;
+  /** Freie Anweisung, was im Leben der Figur passieren soll. */
+  instruction: string;
+  /** true: Bio aus edits.bio wird wörtlich übernommen, sonst formuliert die KI sie im Stil der Figur. */
+  literalBio: boolean;
+  /** true: Die KI denkt sich selbst eine überraschende, glaubwürdige Wendung aus. */
+  surprise: boolean;
 }
 
 export interface RewriteResult {
