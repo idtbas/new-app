@@ -4,7 +4,7 @@
 import { LIMITS } from "../shared/config";
 import type { ApiErrorInfo, ErrorKind } from "../shared/errors";
 import { ERROR_TITLES } from "../shared/errors";
-import type { Character, CharacterSpec, ChatMode, ChatTurnResult, HistoryEntry, ImageResult, Impression, UserProfile } from "../shared/types";
+import type { Character, CharacterSpec, ChatMode, ChatTurnResult, HistoryEntry, ImageResult, Impression, RewriteResult, UserProfile } from "../shared/types";
 import { getCredentials } from "./credentials";
 
 export class ApiError extends Error {
@@ -99,4 +99,6 @@ export const api = {
   evaluate: (character: Character, user: UserProfile) => post<Impression>("/api/evaluate", { character, user }, textLimiter),
   chat: (args: { character: Character; user: UserProfile; mode: ChatMode; interest: number; memory: string[]; history: HistoryEntry[] }) =>
     post<ChatTurnResult>("/api/chat", args, textLimiter),
+  rewrite: (character: Character, description: string, literal: boolean) =>
+    post<RewriteResult>("/api/rewrite", { character, description, literal }, textLimiter),
 };

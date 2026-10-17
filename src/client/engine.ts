@@ -155,11 +155,19 @@ class Engine {
     return this.imageBusy.has(id);
   }
 
-  /** Ein Bild pro Charakter, einmalig. Fehler machen nur dieses Bild unbrauchbar, nicht die App. */
-  async loadImage(c: Character): Promise<void> {
+  /** Gehört das gespeicherte Bild zur aktuellen Version des Charakters? */
+  private imageCurrent(rel: Relation, c: Character): boolean {
+    return rel.imageState === "ready" && (rel.imageVersion ?? 0) === (c.version ?? 0);
+  }
+
+  /**
+   * Ein Bild pro Charakter-Version. Fehler machen nur dieses Bild unbrauchbar, nicht die App;
+   * nach einem Umschreiben bleibt das alte Foto sichtbar, bis das neue fertig ist.
+   */
+  async loadImage(c: Character, force = false): Promise<void> {
     if (this.imageBusy.has(c.id) || !hasCredentials()) return;
     const rel = await db.getRelation(c.id);
-    if (!rel || rel.imageState === "ready") return;
+    if (!rel || (!force && this.imageCurrent(rel, c))) return;
     this.imageBusy.add(c.id);
     this.imageErrors.delete(c.id);
     this.emit();
@@ -167,28 +175,64 @@ class Engine {
       const res = await api.image(c);
       const bytes = Uint8Array.from(atob(res.base64), (ch) => ch.charCodeAt(0));
       await db.putImage({ id: c.id, blob: new Blob([bytes], { type: res.mime }) });
+      const old = this.imageUrls.get(c.id);
+      if (old) URL.revokeObjectURL(old);
+      this.imageUrls.delete(c.id);
       const fresh = await db.getRelation(c.id);
-      if (fresh) await db.putRelation({ ...fresh, imageState: "ready" });
+      if (fresh) await db.putRelation({ ...fresh, imageState: "ready", imageVersion: c.version ?? 0 });
     } catch (err) {
       const info = toErrorInfo(err);
       if (BLOCKING_KINDS.includes(info.kind)) this.paused = info;
       this.imageErrors.set(c.id, describeError(info));
       const fresh = await db.getRelation(c.id);
-      if (fresh) await db.putRelation({ ...fresh, imageState: "failed" });
+      // Ein vorhandenes (älteres) Foto bleibt nutzbar.
+      if (fresh && fresh.imageState !== "ready") await db.putRelation({ ...fresh, imageState: "failed" });
     } finally {
       this.imageBusy.delete(c.id);
       this.emit();
     }
   }
 
-  /** Nach dem Neuladen: fehlende Bilder sichtbarer Profile nachladen (nicht fehlgeschlagene). */
+  /** Nach dem Neuladen: fehlende oder veraltete Bilder sichtbarer Profile nachladen (nicht fehlgeschlagene). */
   async resumeImages(): Promise<void> {
     if (!this.canWork()) return;
     for (const r of await db.allRelations()) {
-      if (r.imageState !== "none" || r.status === "passed" || r.status === "rejected") continue;
+      if (r.imageState === "failed" || r.status === "passed" || r.status === "rejected") continue;
       const c = await db.getCharacter(r.id);
-      if (c) await this.loadImage(c);
+      if (c && !this.imageCurrent(r, c)) await this.loadImage(c);
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Realität umschreiben
+
+  /**
+   * Die Person schreibt die Beschreibung einer Figur um; die KI passt die ganze Figur an.
+   * Gespeicherte Match-Entscheidungen bleiben bestehen, Chats laufen mit der neuen Realität weiter.
+   * Gibt die Zusammenfassung der Änderungen zurück. Fehler werden als ApiError geworfen.
+   */
+  async rewriteCharacter(id: string, description: string, literal: boolean): Promise<string> {
+    const c = await db.getCharacter(id);
+    if (!c) throw new ApiError({ kind: "bad_request", message: "Dieses Profil gibt es nicht mehr." });
+    const res = await api.rewrite(c, description, literal);
+    let updated: Character;
+    try {
+      updated = validateCharacter(res.character);
+    } catch {
+      throw new ApiError({ kind: "model_output", message: "Das umgeschriebene Profil ist unvollständig." });
+    }
+    if (updated.id !== c.id || (updated.version ?? 0) <= (c.version ?? 0)) {
+      throw new ApiError({ kind: "model_output", message: "Das umgeschriebene Profil passt nicht zum Original." });
+    }
+    await db.putCharacter(updated);
+    const rel = await db.getRelation(id);
+    if (rel && (rel.status === "matched" || rel.status === "unmatched")) {
+      const renamed = updated.spec.name !== c.spec.name ? ` – aus ${c.spec.name} wurde ${updated.spec.name}` : "";
+      await db.addMessage({ charId: id, from: "system", text: `Du hast die Realität dieser Person umgeschrieben${renamed}.`, at: Date.now() });
+    }
+    this.emit();
+    void this.loadImage(updated, true);
+    return res.changes;
   }
 
   // -------------------------------------------------------------------------

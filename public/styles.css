@@ -113,6 +113,13 @@ legend { font-weight: 600; margin-bottom: 6px; padding: 0; }
 .image-status { position: absolute; left: 12px; right: 12px; bottom: 12px; text-align: center; background: color-mix(in srgb, var(--surface) 88%, transparent); border-radius: 12px; padding: 8px; }
 .image-status:empty { display: none; }
 .card-badge { position: absolute; top: 12px; left: 12px; }
+.edit-btn { flex: none; width: 48px; height: 48px; border-radius: 50%; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 1.4rem; line-height: 1; cursor: pointer; touch-action: manipulation; }
+.edit-btn.on-image { position: absolute; top: 10px; right: 10px; background: color-mix(in srgb, var(--surface) 88%, transparent); box-shadow: 0 2px 8px rgb(0 0 0 / .15); }
+.chat-profile-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.editor { text-align: left; }
+.editor h2 { margin-top: 0; }
+.editor textarea { min-height: 170px; resize: vertical; }
+.editor-status:empty { display: none; }
 .card-body { padding: 16px 18px 20px; }
 .card-body h2 { margin: 0 0 2px; font-size: 1.5rem; }
 .meta { color: var(--muted); margin: 0 0 8px; }
@@ -189,7 +196,7 @@ legend { font-weight: 600; margin-bottom: 6px; padding: 0; }
 .toasts { position: fixed; left: 50%; transform: translateX(-50%); top: calc(64px + env(safe-area-inset-top)); z-index: 20; display: grid; gap: 8px; width: min(560px, calc(100% - 32px)); pointer-events: none; }
 .toast { background: #2a2427; color: #fff; padding: 12px 16px; border-radius: 12px; box-shadow: 0 6px 20px rgb(0 0 0 / .25); font-size: .95rem; }
 .modal-backdrop { position: fixed; inset: 0; background: rgb(0 0 0 / .45); display: grid; place-items: center; z-index: 30; padding: 16px; }
-.modal { background: var(--surface); border-radius: 20px; padding: 24px; width: min(420px, 100%); text-align: center; }
+.modal { background: var(--surface); border-radius: 20px; padding: 24px; width: min(560px, 100%); max-height: calc(100dvh - 32px); overflow-y: auto; text-align: center; }
 .match-modal h2 { margin-top: 0; color: var(--accent); font-size: 1.6rem; }
 
 /* iPad / große Bildschirme */

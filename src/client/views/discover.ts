@@ -4,6 +4,7 @@ import { hasCredentials } from "../credentials";
 import { clear, h } from "../dom";
 import { engine, type DeckEntry } from "../engine";
 import { aiBadge, orientationLabel, spinner, type Ctx, type Mounted } from "./common";
+import { pencilButton } from "./editor";
 
 const SWIPE_THRESHOLD = 110;
 
@@ -27,49 +28,48 @@ export function profileDetails(c: Character): HTMLElement {
   );
 }
 
-function imageArea(c: Character): HTMLElement {
+function imageArea(ctx: Ctx, c: Character): HTMLElement {
   const box = h("div", { class: "card-image" }, h("div", { class: "placeholder", "aria-hidden": "true" }, c.spec.name.slice(0, 1)));
   const status = h("div", { class: "image-status" });
-  box.append(status, h("div", { class: "card-badge" }, aiBadge()));
+  box.append(status, h("div", { class: "card-badge" }, aiBadge()), pencilButton(ctx, c, "on-image"));
 
   void engine.ensureImageUrl(c.id).then((url) => {
     if (url) {
       box.querySelector(".placeholder")?.remove();
       box.prepend(h("img", { src: url, alt: `KI-generiertes Profilfoto von ${c.spec.name}`, draggable: "false" }));
-      status.remove();
-      return;
     }
     if (engine.isImageLoading(c.id)) {
-      status.append(spinner("Bild wird erzeugt …"));
-    } else {
-      const err = engine.imageErrors.get(c.id);
-      status.append(
-        h("p", { class: "small" }, err ? `Bild fehlgeschlagen. ${err}` : "Noch kein Bild."),
-        hasCredentials()
-          ? h(
-              "button",
-              {
-                class: "btn btn-small",
-                onclick: (ev: Event) => {
-                  ev.stopPropagation();
-                  void engine.loadImage(c);
-                },
-              },
-              "Bild erneut versuchen",
-            )
-          : "",
-      );
+      status.append(spinner(url ? "Neues Foto wird erzeugt …" : "Bild wird erzeugt …"));
+      return;
     }
+    const err = engine.imageErrors.get(c.id);
+    if (url && !err) return;
+    status.append(
+      h("p", { class: "small" }, err ? `${url ? "Neues Foto" : "Bild"} fehlgeschlagen. ${err}` : "Noch kein Bild."),
+      hasCredentials()
+        ? h(
+            "button",
+            {
+              class: "btn btn-small",
+              onclick: (ev: Event) => {
+                ev.stopPropagation();
+                void engine.loadImage(c, true);
+              },
+            },
+            "Bild erneut versuchen",
+          )
+        : "",
+    );
   });
   return box;
 }
 
-function card(entry: DeckEntry): HTMLElement {
+function card(ctx: Ctx, entry: DeckEntry): HTMLElement {
   const c = entry.character;
   return h(
     "article",
     { class: "card", "aria-label": `Profil von ${c.spec.name}` },
-    imageArea(c),
+    imageArea(ctx, c),
     h(
       "div",
       { class: "card-body" },
@@ -151,8 +151,11 @@ export function discoverView(ctx: Ctx): Mounted {
     // Nur neu zeichnen, wenn sich etwas Sichtbares geändert hat (verhindert Flackern).
     const sig = JSON.stringify([
       top?.character.id,
+      top?.character.version,
       top ? engine.isImageLoading(top.character.id) : null,
+      top ? engine.imageErrors.get(top.character.id) : null,
       top?.relation.imageState,
+      top?.relation.imageVersion,
       deck.length,
       engine.generating,
       engine.generationError?.message,
@@ -164,7 +167,7 @@ export function discoverView(ctx: Ctx): Mounted {
     clear(area);
 
     if (top) {
-      const cardEl = card(top);
+      const cardEl = card(ctx, top);
       enableSwipe(cardEl, (a) => void act(top.character.id, a));
       area.append(
         cardEl,

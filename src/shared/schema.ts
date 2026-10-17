@@ -20,6 +20,7 @@ import {
   type GeneratedProfile,
   type HistoryEntry,
   type Impression,
+  type RewriteResult,
   type UserProfile,
 } from "./types";
 
@@ -259,11 +260,109 @@ export function validateCharacter(v: unknown): Character {
   const spec = validateSpec(o.spec);
   const id = str(o.id, "character.id", STRICT, 64);
   if (id !== spec.id) throw new ValidationError("character.id", "passt nicht zur Spezifikation");
-  return {
+  const out: Character = {
     id,
     createdAt: int(o.createdAt, "character.createdAt", 0, Number.MAX_SAFE_INTEGER),
     spec,
     profile: profileWith(o.profile, STRICT, "character.profile"),
+  };
+  if (o.version !== undefined) out.version = int(o.version, "character.version", 0, 100_000);
+  if (o.editedAt !== undefined) out.editedAt = int(o.editedAt, "character.editedAt", 0, Number.MAX_SAFE_INTEGER);
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Umschreiben der Realität einer Figur
+
+const DESCRIPTION_MIN = 10;
+const DESCRIPTION_MAX = 600;
+
+/** Neue Beschreibung der Person. Bei wörtlicher Übernahme gelten die Grenzen der Bio. */
+export function validateDescription(v: unknown, literal: boolean): string {
+  return literal ? str(v, "description", STRICT, 500, 20) : str(v, "description", STRICT, DESCRIPTION_MAX, DESCRIPTION_MIN);
+}
+
+function objOrEmpty(v: unknown): Obj {
+  return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Obj) : {};
+}
+
+/** Liefert den neuen Wert, wenn er gültig ist, sonst den alten („alles andere bleibt“). */
+function orKeep<T>(fn: () => T, fallback: T): T {
+  try {
+    return fn();
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Wendet die vom Modell umgeschriebene Figur an. Unveränderliche Felder (ID, Seed,
+ * Erstellungszeit) bleiben, Alter wird hart auf 18–40 begrenzt, ungültige Einzelwerte
+ * fallen auf den alten Stand zurück. Das Profil muss vollständig gültig sein.
+ */
+export function parseRewrite(v: unknown, old: Character, now: number): RewriteResult {
+  const o = obj(v, "umschrift");
+  const s = objOrEmpty(o.spec);
+  const looks = objOrEmpty(s.looks);
+  const style = objOrEmpty(s.style);
+  const os = old.spec;
+  const text = (x: unknown, path: string, max: number, fallback: string) => orKeep(() => str(x, path, LENIENT, max), fallback);
+
+  const rawAge = typeof s.age === "number" || typeof s.age === "string" ? Number(s.age) : NaN;
+  // Harte Grenze: Auch wenn die Beschreibung etwas anderes verlangt, bleibt die Figur erwachsen.
+  const age = Number.isFinite(rawAge) ? Math.max(MIN_AGE, Math.min(CHARACTER_MAX_AGE, Math.round(rawAge))) : os.age;
+  const shift = age - os.age;
+  const lo = Math.max(MIN_AGE, os.ageRange[0] + shift);
+  const hi = Math.max(lo, os.ageRange[1] + shift);
+
+  const spec = validateSpec({
+    ...os,
+    name: text(s.name, "spec.name", 40, os.name),
+    age,
+    ageRange: [lo, hi],
+    gender: orKeep(() => oneOf(s.gender, "spec.gender", GENDERS), os.gender),
+    lookingFor: orKeep(() => uniqueGenders(s.lookingFor, "spec.lookingFor"), os.lookingFor),
+    city: text(s.city, "spec.city", 60, os.city),
+    intent: orKeep(() => oneOf(s.intent, "spec.intent", INTENTS), os.intent),
+    occupationHint: text(s.occupationHint, "spec.occupationHint", 120, os.occupationHint),
+    lifestyle: orKeep(() => [...new Set(arr(s.lifestyle, "spec.lifestyle", STRICT, 0, 3, (x, p) => oneOf(x, p, LIFESTYLES)))], os.lifestyle),
+    temperament: orKeep(() => oneOf(s.temperament, "spec.temperament", TEMPERAMENTS), os.temperament),
+    looks: {
+      ...os.looks,
+      heritage: text(looks.heritage, "spec.looks.heritage", 80, os.looks.heritage),
+      skin: text(looks.skin, "spec.looks.skin", 80, os.looks.skin),
+      bodyType: text(looks.bodyType, "spec.looks.bodyType", 80, os.looks.bodyType),
+      attractiveness: orKeep(() => oneOf(looks.attractiveness, "spec.looks.attractiveness", ATTRACTIVENESS), os.looks.attractiveness),
+      hairHint: text(looks.hairHint, "spec.looks.hairHint", 120, os.looks.hairHint),
+      glasses: typeof looks.glasses === "boolean" ? looks.glasses : os.looks.glasses,
+      setting: text(looks.setting, "spec.looks.setting", 200, os.looks.setting),
+      photoStyle: text(looks.photoStyle, "spec.looks.photoStyle", 200, os.looks.photoStyle),
+    },
+    style: {
+      ...os.style,
+      replyLength: orKeep(() => oneOf(style.replyLength, "spec.style.replyLength", REPLY_LENGTHS), os.style.replyLength),
+      emoji: orKeep(() => oneOf(style.emoji, "spec.style.emoji", EMOJI_USES), os.style.emoji),
+      responsiveness: orKeep(() => oneOf(style.responsiveness, "spec.style.responsiveness", RESPONSIVENESS), os.style.responsiveness),
+      writing: text(style.writing, "spec.style.writing", 160, os.style.writing),
+    },
+  });
+
+  const profile = profileWith(o.profile, LENIENT, "profil");
+  // Neue Frisur-Vorgabe, aber vergessene Foto-Stichworte: sonst bliebe die alte Frisur im Bild.
+  if (spec.looks.hairHint !== os.looks.hairHint && profile.photo.hair === old.profile.photo.hair) {
+    profile.photo.hair = spec.looks.hairHint;
+  }
+
+  return {
+    character: {
+      id: old.id,
+      createdAt: old.createdAt,
+      spec,
+      profile,
+      version: (old.version ?? 0) + 1,
+      editedAt: now,
+    },
+    changes: text(o.changes, "changes", 240, ""),
   };
 }
 

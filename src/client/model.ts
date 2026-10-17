@@ -14,6 +14,8 @@ export interface Relation {
   createdAt: number;
   status: RelationStatus;
   imageState: "none" | "ready" | "failed";
+  /** Version des Charakters, zu der das gespeicherte Bild gehört (fehlt = 0). */
+  imageVersion?: number;
   likedAt?: number;
   decision?: Decision;
   matchedAt?: number;

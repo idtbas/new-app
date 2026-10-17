@@ -106,6 +106,9 @@ export interface Character {
   createdAt: number;
   spec: CharacterSpec;
   profile: GeneratedProfile;
+  /** Erhöht sich, wenn die Person die Realität der Figur bewusst umschreibt. Fehlt = 0. */
+  version?: number;
+  editedAt?: number;
 }
 
 export type ChatAction = "none" | "end_conversation" | "unmatch";
@@ -157,6 +160,21 @@ export interface ChatRequest {
   interest: number;
   memory: string[];
   history: HistoryEntry[];
+}
+
+export interface RewriteRequest {
+  credentials: Credentials;
+  character: Character;
+  /** Neue Beschreibung, die die Person geschrieben hat. */
+  description: string;
+  /** true: Text wird wörtlich als Bio übernommen, sonst formuliert die KI ihn im Stil der Figur. */
+  literal: boolean;
+}
+
+export interface RewriteResult {
+  character: Character;
+  /** Kurze Zusammenfassung der Änderungen (vom Modell). */
+  changes: string;
 }
 
 export interface ImageResult {

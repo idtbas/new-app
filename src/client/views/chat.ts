@@ -4,6 +4,7 @@ import { clear, h } from "../dom";
 import { engine } from "../engine";
 import { aiBadge, avatar, timeLabel, type Ctx, type Mounted } from "./common";
 import { profileDetails } from "./discover";
+import { pencilButton } from "./editor";
 
 export function chatView(ctx: Ctx, id: string): Mounted {
   const header = h("div", { class: "chat-header" });
@@ -48,8 +49,10 @@ export function chatView(ctx: Ctx, id: string): Mounted {
       ctx.go({ name: "matches" });
       return;
     }
-    if (headerStatus === r.status) return;
-    headerStatus = r.status;
+    // Neu zeichnen bei Statuswechsel oder umgeschriebener Realität (neue Version, neues Foto).
+    const sig = `${r.status}:${c.version ?? 0}:${r.imageVersion ?? 0}`;
+    if (headerStatus === sig) return;
+    headerStatus = sig;
     clear(header);
     header.append(
       h("button", { class: "btn btn-ghost back", "aria-label": "Zurück zu den Matches", onclick: () => ctx.go({ name: "matches" }) }, "‹"),
@@ -79,7 +82,10 @@ export function chatView(ctx: Ctx, id: string): Mounted {
         : "",
     );
     clear(profileBox);
-    profileBox.append(h("p", { class: "meta" }, `${c.profile.occupation} · ${c.spec.city}`), profileDetails(c));
+    profileBox.append(
+      h("div", { class: "chat-profile-head" }, h("p", { class: "meta" }, `${c.profile.occupation} · ${c.spec.city}`), pencilButton(ctx, c)),
+      profileDetails(c),
+    );
   }
 
   async function render() {

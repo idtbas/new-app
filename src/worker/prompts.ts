@@ -255,3 +255,67 @@ Antworte ausschließlich mit JSON in dieser Form:
     { role: "user", content: user },
   ];
 }
+
+// ---------------------------------------------------------------------------
+// Realität umschreiben
+
+export function rewriteMessages(c: Character, description: string, literal: boolean): ChatMessage[] {
+  const system = [
+    "Du überarbeitest fiktive Figuren in einer deutschsprachigen Dating-App, in der alle Profile offen als KI-generiert gekennzeichnet sind.",
+    "Die Person, die die App nutzt, darf die Realität einer Figur umschreiben. Setze ihre neue Beschreibung konsequent um:",
+    "Alles, was die Beschreibung festlegt oder deutlich nahelegt, änderst du – auch Name, Alter, Beruf, Wohnort, Lebensstil, Aussehen, Persönlichkeit, Werte und Chat-Stil.",
+    "Alles, was die Beschreibung nicht berührt, bleibt wie bisher, damit die Figur in sich stimmig und glaubwürdig bleibt. Passe abhängige Details an (z. B. Hintergrund, Interessen, Fotostichworte), damit nichts widersprüchlich ist.",
+    "Feste Regeln: Die Figur ist und bleibt erwachsen (18 bis 40 Jahre) – Angaben, die sie jünger machen würden, ignorierst du. Keine expliziten sexuellen Inhalte, keine realen oder prominenten Personen, keine Links, Handles oder Telefonnummern. Der Wohnort bleibt ein erfundener Ort.",
+    "Schreibe auf Deutsch; nur die Aussehens- und Fotofelder (spec.looks und profile.photo) sind kurze englische Stichworte.",
+    "Antworte ausschließlich mit einem einzigen JSON-Objekt.",
+  ].join("\n");
+
+  const current = {
+    spec: {
+      name: c.spec.name,
+      age: c.spec.age,
+      gender: c.spec.gender,
+      lookingFor: c.spec.lookingFor,
+      city: c.spec.city,
+      intent: c.spec.intent,
+      occupationHint: c.spec.occupationHint,
+      lifestyle: c.spec.lifestyle,
+      temperament: c.spec.temperament,
+      looks: { ...c.spec.looks },
+      style: { replyLength: c.spec.style.replyLength, emoji: c.spec.style.emoji, responsiveness: c.spec.style.responsiveness, writing: c.spec.style.writing },
+    },
+    profile: c.profile,
+  };
+
+  const bioRule = literal
+    ? "profile.bio: Übernimm die neue Beschreibung wörtlich."
+    : "profile.bio: Die neue Beschreibung, inhaltlich treu, aber in Ich-Form und im Schreibstil der (ggf. neuen) Figur formuliert, 1 bis 4 Sätze.";
+
+  const user = `Aktuelle Figur:
+${JSON.stringify(current, null, 2)}
+
+Neue Beschreibung von der Person, die die App nutzt:
+<<<
+${description.replace(/<<<|>>>/g, "")}
+>>>
+
+Gib die vollständige, angepasste Figur in genau dieser Struktur zurück (alle Felder von "profile" sind Pflicht, Felder in "spec" nur ändern, wenn nötig):
+{
+  "spec": {
+    "name": "...", "age": 18-40, "gender": "frau|mann|nichtbinaer", "lookingFor": ["frau|mann|nichtbinaer"],
+    "city": "erfundener Ort", "intent": "beziehung|locker|offen", "occupationHint": "...",
+    "lifestyle": ["influencer|onlyfans|status", ...] oder [],
+    "temperament": "introvertiert|ambivertiert|extrovertiert",
+    "looks": { "heritage": "...", "skin": "...", "bodyType": "...", "attractiveness": "unauffällig|durchschnittlich|attraktiv|sehr attraktiv", "hairHint": "...", "glasses": true/false, "setting": "...", "photoStyle": "..." },
+    "style": { "replyLength": "kurz|mittel|lang", "emoji": "nie|selten|oft", "responsiveness": "schnell|mittel|langsam", "writing": "..." }
+  },
+  "profile": { "occupation": "...", "bio": "...", "interests": [...], "traits": [...], "humor": "...", "communicationStyle": "...", "values": [...], "partnerPreferences": "...", "dealbreakers": [...], "boundaries": [...], "speechQuirks": [...], "backstory": "...", "photo": { "outfit": "...", "hair": "...", "details": "..." } },
+  "changes": "ein kurzer Satz auf Deutsch, was sich an der Figur geändert hat"
+}
+${bioRule}`;
+
+  return [
+    { role: "system", content: system },
+    { role: "user", content: user },
+  ];
+}

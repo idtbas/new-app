@@ -10,7 +10,9 @@ import {
   parseChatTurn,
   parseGeneratedProfile,
   parseImpression,
+  parseRewrite,
   validateCharacter,
+  validateDescription,
   validateCredentials,
   validateHistory,
   validateMemory,
@@ -19,7 +21,7 @@ import {
 } from "../shared/schema";
 import type { Character, ChatMode, Credentials, UserProfile } from "../shared/types";
 import { runImage, runText, type ChatMessage, type TextOptions, type UpstreamResult } from "./cloudflare";
-import { characterMessages, chatMessages, imagePrompt, impressionMessages } from "./prompts";
+import { characterMessages, chatMessages, imagePrompt, impressionMessages, rewriteMessages } from "./prompts";
 
 export interface Env {
   ASSETS: Fetcher;
@@ -105,8 +107,10 @@ async function handleCharacter(body: Record<string, unknown>, creds: Credentials
 
 async function handleImage(body: Record<string, unknown>, creds: Credentials): Promise<Response> {
   const character = validateCharacter(body.character);
-  // Stabiler Bild-Seed pro Charakter: Ein erneuter Versuch erzeugt dasselbe Gesicht.
-  const seed = hashString(`image:${character.id}:${character.spec.seed}`) % 2_147_483_647;
+  // Stabiler Bild-Seed pro Charakter und Version: Ein erneuter Versuch erzeugt dasselbe Gesicht,
+  // eine umgeschriebene Realität (neue Version) ein neues.
+  const version = character.version ? `:v${character.version}` : "";
+  const seed = hashString(`image:${character.id}:${character.spec.seed}${version}`) % 2_147_483_647;
   const res = await runImage(creds.accountId, creds.imageToken, imagePrompt(character), seed);
   if (!res.ok) return upstreamFailure(res.error);
   return json({ ok: true, data: res.value });
@@ -141,11 +145,28 @@ async function handleChat(body: Record<string, unknown>, creds: Credentials): Pr
   return json({ ok: true, data: res.value });
 }
 
+async function handleRewrite(body: Record<string, unknown>, creds: Credentials): Promise<Response> {
+  const character = validateCharacter(body.character);
+  const literal = body.literal === true;
+  const description = validateDescription(body.description, literal);
+  const seed = hashString(`rewrite:${character.id}:${character.version ?? 0}:${description}`);
+  const res = await textJson(
+    creds,
+    rewriteMessages(character, description, literal),
+    { maxTokens: 2200, temperature: 0.7, seed },
+    (v) => parseRewrite(v, character, Date.now()),
+  );
+  if (!res.ok) return upstreamFailure(res.error);
+  if (literal) res.value.character.profile.bio = description;
+  return json({ ok: true, data: res.value });
+}
+
 const ROUTES: Record<string, (body: Record<string, unknown>, creds: Credentials) => Promise<Response>> = {
   "/api/character": handleCharacter,
   "/api/image": handleImage,
   "/api/evaluate": handleEvaluate,
   "/api/chat": handleChat,
+  "/api/rewrite": handleRewrite,
 };
 
 export async function handleApi(request: Request): Promise<Response> {

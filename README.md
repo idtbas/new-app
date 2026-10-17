@@ -4,7 +4,7 @@ Deutschsprachiger Dating-Prototyp, in dem **alle Profile, Fotos und Gespräche K
 Profile entdecken, liken oder ablehnen, gegenseitige Matches (die Figuren entscheiden selbst) und
 charaktertreue Chats. Nur für Erwachsene (18+, Selbstauskunft, keine verifizierte Altersprüfung).
 
-- **Ein einziger Worker** liefert die Oberfläche (statische Assets) und vier feste API-Routen aus.
+- **Ein einziger Worker** liefert die Oberfläche (statische Assets) und fünf feste API-Routen aus.
 - **Keine Datenbank, kein App-Konto, kein Cloudflare-Login**: Daten liegen lokal im Browser (IndexedDB).
 - **Workers AI über die REST-API** mit den Zugangsdaten der Person, die die App benutzt.
 - TypeScript, keine Laufzeit-Abhängigkeiten. Dev-Abhängigkeiten: `wrangler`, `typescript`, `esbuild`, `vitest`, `@cloudflare/workers-types`.
@@ -37,11 +37,11 @@ src/shared/               von Worker und Browser gemeinsam genutzt
   matching.ts             Entscheidung der Figur über ein Like
   rng.ts, json.ts, errors.ts
 src/worker/
-  index.ts                Router: /api/character, /api/image, /api/evaluate, /api/chat
+  index.ts                Router: /api/character, /api/image, /api/evaluate, /api/chat, /api/rewrite
   cloudflare.ts           Upstream-Aufrufe (nur api.cloudflare.com, redirect:"manual", Fehler-Mapping)
   prompts.ts              Prompts (Profil, Bild, Eindruck, Chat-System-Prompt je Charakter)
 src/client/
-  main.ts, views/*        Oberfläche (Vanilla-TS, kein Framework, nur textContent)
+  main.ts, views/*        Oberfläche (Vanilla-TS, kein Framework, nur textContent); views/editor.ts = Stift
   engine.ts               Profilvorrat, Likes, simulierte Verzögerungen, Antworten
   chatlogic.ts            reine Chatlogik (Kontext, Interesse, Erinnerungen, Auflösen)
   db.ts                   IndexedDB
@@ -120,7 +120,23 @@ Der Worker hält keinen Zustand im Speicher.
 - **Bild**: Prompt aus Eckdaten + Fotostichworten, „clearly an adult“, vollständig bekleidet, alltägliche Situation,
   unterschiedliche Attraktivität/Körperformen, kein Prominenter; unpassende Begriffe werden herausgefiltert.
   Unter 21 wird bewusst „early twenties“ beschrieben. Stabiler Seed pro Charakter.
-- **Konsistenz**: Ein Charakter wird einmal erzeugt und gespeichert (inkl. Bild) und nie neu generiert.
+- **Konsistenz**: Ein Charakter wird einmal erzeugt und gespeichert (inkl. Bild) und verändert sich nie von selbst.
+
+## Realität umschreiben (✎)
+
+Jede Profilkarte und der Profilbereich jedes Chats haben einen Stift. Damit bearbeitest du die Beschreibung
+einer Figur; nach dem Speichern passt Gemma (`/api/rewrite`) **die ganze Person** an: alles, was die neue
+Beschreibung festlegt oder nahelegt (Name, Alter, Geschlecht, Beruf, Wohnort, Lebensstil, Persönlichkeit,
+Interessen, Werte, Aussehen, Chat-Stil …), alles andere bleibt. Danach wird ein **neues Foto** erzeugt
+(neuer Bild-Seed je Version); das alte bleibt sichtbar, bis das neue fertig ist.
+
+- Optional wird der Text wörtlich als Bio übernommen, sonst formuliert die KI ihn im Stil der Figur.
+- Leitplanken: Alter wird serverseitig hart auf 18–40 begrenzt (Hinweise auf Minderjährige lehnt schon der Editor ab),
+  keine expliziten Inhalte, keine realen Personen, Bild-Prompt bleibt „clearly an adult, fully clothed“.
+- ID, Seed und Erstellungszeit bleiben; ungültige Einzelwerte des Modells fallen auf den alten Stand zurück;
+  jede Änderung erhöht die Version der Figur.
+- Bereits gespeicherte Match-Entscheidungen bleiben bestehen. Chats laufen mit der neuen Realität weiter;
+  im Chat erscheint ein Hinweis, dass du die Realität umgeschrieben hast.
 
 ## Matching
 
@@ -157,7 +173,7 @@ Workers AI hat ein kontoweites kostenloses Tageskontingent; bei bestehendem Beza
 
 ## Teststand – ehrlich
 
-**Automatisiert getestet (`npm test`, 52 Tests):**
+**Automatisiert getestet (`npm test`, 62 Tests):**
 - Multipart-Serialisierung inkl. boundary, kein manueller Content-Type, kein JSON-Body, `redirect: "manual"`, feste URL.
 - Status-/Fehlerweitergabe für 401, 403, 404/7003, 429/3040, 429/3036, 500, 504, 302 (nicht verfolgt),
   Netzwerkfehler (ohne HTTP-Antwort), Timeout; keine Upstream-Texte oder Tokens in Antworten.
@@ -167,19 +183,22 @@ Workers AI hat ein kontoweites kostenloses Tageskontingent; bei bestehendem Beza
 - Casting: Determinismus, nur Erwachsene, Vielfalt, Häufigkeit seltener Varianten, keine Kopplung an Geschlecht.
 - Matching: Determinismus, kein Münzwurf, Wählerischkeit, vorab festgelegtes Ergebnis bei Unentschlossenheit.
 - Getrennte Chatkontexte, Interesse/Erinnerung, Gesprächsende und Match-Auflösung.
+- Realität umschreiben: Übernahme der Änderungen, unveränderte ID/Seed, Altersgrenze 18–40, Rückfall bei ungültigen
+  Werten, wörtliche Bio, Versionszähler, neuer Bild-Seed und neue Frisur im Bild-Prompt.
 
 **In der echten Workers-Laufzeit (lokal `wrangler dev`/workerd) geprüft:** Auslieferung der Assets inkl. CSP,
 Validierung, Origin-Prüfung, Fehlerweitergabe ohne Token-Leak (Upstream war blockiert → korrekt als
 „keine HTTP-Antwort“ gemeldet), FormData-Bildpfad.
 
 **End-to-End in Chromium (iPad- und iPhone-Viewport, Touch) mit simulierten `/api/*`-Antworten:**
-Altersbestätigung, Onboarding (Alter < 18 abgelehnt), Profilvorrat (≤ 3), KI-Kennzeichnung, Like/Ablehnen per Button,
+Altersbestätigung, Onboarding (Alter < 18 abgelehnt), Profilvorrat (≤ 3), KI-Kennzeichnung, Stift/Umschreiben
+(inkl. Ablehnung „16 Jahre“, neues Foto angefordert), Like/Ablehnen per Button,
 Match, Chat mit simulierter Verzögerung, keine Tokens in URLs/Headern/Speichern, Neuladen (Tokens weg, Profile/Matches/
 Chats identisch), Bildfehler ohne Absturz, Kontingentfehler mit Status und Code, Löschen aller Daten.
 Das E2E-Skript lag in einem temporären Verzeichnis und ist nicht Teil des Repos.
 
 **Nicht live bestätigt:** Echte Aufrufe an `api.cloudflare.com` waren aus der Entwicklungsumgebung nicht möglich.
-Unbestätigt sind daher: die tatsächliche Antwortform beider Modelle über `/ai/run` (der Code akzeptiert
+Unbestätigt sind daher auch, wie gut Gemma beim Umschreiben die gesamte Figur stimmig anpasst, sowie: die tatsächliche Antwortform beider Modelle über `/ai/run` (der Code akzeptiert
 `choices[].message.content`, `response` und `output_text` bzw. JSON-`image` und Binärbilder), ob `seed` und
 `chat_template_kwargs` per REST akzeptiert werden, die Qualität/Einhaltung des JSON-Formats durch Gemma,
 Bildqualität und Altersanmutung von FLUX sowie die genaue Zuordnung einzelner Cloudflare-Fehlercodes
