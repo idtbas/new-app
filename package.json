@@ -1,0 +1,22 @@
+{
+  "name": "ki-dating-prototyp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Deutschsprachiger Dating-Prototyp mit vollständig KI-generierten Charakteren auf Cloudflare Workers",
+  "scripts": {
+    "build:client": "esbuild src/client/main.ts --bundle --format=esm --target=es2020 --minify --sourcemap --outfile=public/app.js",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc -p tsconfig.worker.json && tsc -p tsconfig.client.json",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm test && npm run build:client"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261016.1",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0",
+    "wrangler": "^4.151.0"
+  }
+}

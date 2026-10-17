@@ -1,0 +1,25 @@
+{
+  // Ein einzelner Worker liefert die Oberfläche (statische Assets) und den API-Proxy aus.
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "ki-dating-prototyp",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    // Nur /api/* läuft zuerst durch den Worker, alles andere sind statische Dateien.
+    "run_worker_first": ["/api/*"]
+  },
+  // Der Client-Code (TypeScript) wird vor `wrangler dev` und `wrangler deploy` gebündelt.
+  "build": {
+    "command": "npm run build:client"
+  },
+  // Bewusst aus: Request-Bodies enthalten Tokens. Der Worker selbst loggt nichts davon,
+  // und es soll auch keine Plattform-Protokollierung zusätzlich aktiviert werden.
+  "observability": {
+    "enabled": false
+  },
+  // Keine Bindings (kein KV, kein D1, kein Workers-AI-Binding): Aufrufe laufen über die
+  // REST-API mit den Zugangsdaten der Person, die die App benutzt.
+  "workers_dev": true
+}
